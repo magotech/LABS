@@ -457,4 +457,22 @@
     .lawyer-card.active .text-muted {
         color: rgba(255,255,255,0.8) !important;
     }
+
+    /* Smooth transitions for hover effects */
+tr {
+    transition: background-color 0.2s ease;
+}
+
+/* Better table cell padding */
+.table-cell {
+    padding: 0.75rem 1.5rem;
+}
+
+/* Status badge styling */
+.status-badge {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    border-radius: 9999px;
+}
 }

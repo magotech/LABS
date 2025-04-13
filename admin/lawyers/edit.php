@@ -6,20 +6,28 @@ require_once '../../includes/functions.php';
 
 adminAuthCheck();
 
+// Get lawyer ID from URL
+$lawyerId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
+if (!$lawyerId) {
+    $_SESSION['error'] = "Invalid lawyer ID";
+    header("Location: manage.php");
+    exit;
+}
+
+// Fetch lawyer data
+$stmt = $pdo->prepare("SELECT * FROM lawyers WHERE id = ?");
+$stmt->execute([$lawyerId]);
+$lawyer = $stmt->fetch();
+
+if (!$lawyer) {
+    $_SESSION['error'] = "Lawyer not found";
+    header("Location: manage.php");
+    exit;
+}
+
 // Initialize variables
 $errors = [];
-$lawyer = [
-    'first_name' => '',
-    'last_name' => '',
-    'email' => '',
-    'phone' => '',
-    'specialization' => '',
-    'license_number' => '',
-    'bio' => '',
-    'experience_years' => 0,
-    'consultation_fee' => 0.00,
-    'status' => 'active'
-];
+$currentPhoto = $lawyer['photo'];
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -47,15 +55,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($lawyer['specialization'])) $errors['specialization'] = 'Specialization is required';
     if (empty($lawyer['license_number'])) $errors['license_number'] = 'License number is required';
 
-    // Check if email or license number already exists
-    $stmt = $pdo->prepare("SELECT id FROM lawyers WHERE email = ? OR license_number = ?");
-    $stmt->execute([$lawyer['email'], $lawyer['license_number']]);
+    // Check if email or license number already exists (excluding current lawyer)
+    $stmt = $pdo->prepare("SELECT id FROM lawyers WHERE (email = ? OR license_number = ?) AND id != ?");
+    $stmt->execute([$lawyer['email'], $lawyer['license_number'], $lawyerId]);
     if ($stmt->fetch()) {
         $errors['email'] = 'Email or license number already exists';
     }
 
     // Handle file upload
-    $photo = null;
+    $photo = $currentPhoto;
     if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
         $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
         $fileInfo = finfo_open(FILEINFO_MIME_TYPE);
@@ -63,25 +71,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         finfo_close($fileInfo);
 
         if (in_array($detectedType, $allowedTypes)) {
+            // Delete old photo if exists
+            if ($currentPhoto && file_exists("../../uploads/profile_pictures/$currentPhoto")) {
+                unlink("../../uploads/profile_pictures/$currentPhoto");
+            }
+
             $extension = pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
             $photo = uniqid('lawyer_') . '.' . $extension;
             $uploadPath = '../../uploads/profile_pictures/' . $photo;
 
             if (!move_uploaded_file($_FILES['photo']['tmp_name'], $uploadPath)) {
                 $errors['photo'] = 'Failed to upload photo';
+                $photo = $currentPhoto; // Revert to current photo if upload fails
             }
         } else {
             $errors['photo'] = 'Invalid file type. Only JPG, PNG, and GIF are allowed.';
         }
     }
 
-    // If no errors, insert into database
+    // If no errors, update database
     if (empty($errors)) {
         try {
             $stmt = $pdo->prepare("
-                INSERT INTO lawyers 
-                (first_name, last_name, email, phone, specialization, license_number, bio, experience_years, consultation_fee, photo, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                UPDATE lawyers SET 
+                first_name = ?, last_name = ?, email = ?, phone = ?, specialization = ?, 
+                license_number = ?, bio = ?, experience_years = ?, consultation_fee = ?, 
+                photo = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
             ");
             $stmt->execute([
                 $lawyer['first_name'],
@@ -94,10 +110,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $lawyer['experience_years'],
                 $lawyer['consultation_fee'],
                 $photo,
-                $lawyer['status']
+                $lawyer['status'],
+                $lawyerId
             ]);
 
-            $_SESSION['success'] = "Lawyer added successfully";
+            $_SESSION['success'] = "Lawyer updated successfully";
             header("Location: manage.php");
             exit;
         } catch (PDOException $e) {
@@ -106,14 +123,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$pageTitle = "Add New Lawyer";
+$pageTitle = "Edit Lawyer";
 include '../../includes/header.php';
 ?>
 
 <div class="bg-white rounded-lg shadow overflow-hidden max-w-3xl mx-auto">
     <div class="px-6 py-4 border-b border-gray-200">
         <h2 class="font-semibold text-lg text-gray-800">
-            <i class="fas fa-user-plus mr-2 text-blue-500"></i> Add New Lawyer
+            <i class="fas fa-user-edit mr-2 text-blue-500"></i> Edit Lawyer: <?= htmlspecialchars($lawyer['first_name'] . ' ' . $lawyer['last_name']) ?>
         </h2>
     </div>
     
@@ -216,8 +233,8 @@ include '../../includes/header.php';
                 <label for="photo" class="block text-sm font-medium text-gray-700">Photo</label>
                 <div class="mt-1 flex items-center">
                     <span class="inline-block h-12 w-12 rounded-full overflow-hidden bg-gray-100">
-                        <?php if (isset($photo)): ?>
-                            <img src="../../uploads/profile_pictures/<?= htmlspecialchars($photo) ?>" alt="Preview" class="h-full w-full object-cover">
+                        <?php if ($lawyer['photo']): ?>
+                            <img src="../../uploads/profile_pictures/<?= htmlspecialchars($lawyer['photo']) ?>" alt="Current Photo" class="h-full w-full object-cover">
                         <?php else: ?>
                             <svg class="h-full w-full text-gray-300" fill="currentColor" viewBox="0 0 24 24">
                                 <path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -225,6 +242,12 @@ include '../../includes/header.php';
                         <?php endif; ?>
                     </span>
                     <input type="file" id="photo" name="photo" accept="image/*" class="ml-5 block">
+                    <?php if ($lawyer['photo']): ?>
+                        <div class="ml-4">
+                            <input type="checkbox" id="remove_photo" name="remove_photo" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                            <label for="remove_photo" class="ml-2 text-sm text-gray-700">Remove current photo</label>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <?php if (isset($errors['photo'])): ?>
                     <p class="mt-1 text-sm text-red-600"><?= $errors['photo'] ?></p>
@@ -243,7 +266,7 @@ include '../../includes/header.php';
                 Cancel
             </a>
             <button type="submit" class="ml-3 inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                Save Lawyer
+                Update Lawyer
             </button>
         </div>
     </form>

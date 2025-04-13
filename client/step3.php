@@ -1,281 +1,222 @@
-<?php 
+<?php
 require_once __DIR__ . '/../includes/config.php';
 
-// Check if lawyer was selected
-if (!isset($_POST['lawyer']) || !isset($_SESSION['booking']['specialization_id'])) {
-    header("Location: index.php");
-    exit;
+if (!isset($_POST['lawyer_id']) || !isset($_SESSION['booking']['specialization_id'])) {
+    header("Location: step1.php");
+    exit();
 }
 
-$lawyer_id = (int)$_POST['lawyer'];
+$lawyer_id = intval($_POST['lawyer_id']);
+$specialization_id = $_SESSION['booking']['specialization_id'];
+
+// Store in session for later steps
 $_SESSION['booking']['lawyer_id'] = $lawyer_id;
 
-// Get lawyer details
-try {
-    $stmt = $pdo->prepare("
-        SELECT l.*, u.first_name, u.last_name, s.name as specialization_name 
+// Fetch lawyer details
+$sql = "SELECT l.*, u.first_name, u.last_name, s.name as specialization_name 
         FROM lawyers l
         JOIN users u ON l.user_id = u.id
         JOIN specializations s ON l.specialization_id = s.id
-        WHERE l.id = ?
-    ");
-    $stmt->execute([$lawyer_id]);
-    $lawyer = $stmt->fetch();
+        WHERE l.id = $lawyer_id";
+$lawyer = $conn->query($sql)->fetch_assoc();
 
-    if (!$lawyer) {
-        $_SESSION['error'] = "Selected lawyer not found";
-        header("Location: step2.php");
-        exit;
-    }
-} catch (PDOException $e) {
-    $_SESSION['error'] = "Database error: " . $e->getMessage();
-    header("Location: step2.php");
-    exit;
-}
+// Fetch available time slots for this lawyer
+$sql = "SELECT * FROM time_slots WHERE lawyer_id = $lawyer_id AND is_available = 1";
+$time_slots = $conn->query($sql);
 
-$pageTitle = "Select Date & Time";
-include '../includes/header.php'; 
+// Fetch existing appointments to mark as unavailable
+$sql = "SELECT appointment_date, start_time, end_time FROM appointments 
+        WHERE lawyer_id = $lawyer_id AND status = 'confirmed'";
+$appointments = $conn->query($sql);
 
-// Display any errors
-if (isset($_SESSION['error'])) {
-    echo '<div class="alert alert-danger">' . $_SESSION['error'] . '</div>';
-    unset($_SESSION['error']);
-}
+require_once __DIR__ . '/../includes/header.php';
 ?>
 
-<div class="container py-5">
-    <!-- Progress Steps -->
-    <div class="d-flex justify-content-between mb-5">
-        <div class="step step-completed rounded-circle d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
-            <i class="fas fa-check"></i>
-        </div>
-        <div class="step step-completed rounded-circle d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
-            <i class="fas fa-check"></i>
-        </div>
-        <div class="step step-active rounded-circle d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
-            3
-        </div>
-        <div class="step bg-light rounded-circle d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
-            4
-        </div>
-    </div>
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@5.10.1/main.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@5.10.1/main.min.js"></script>
 
-    <div class="card shadow-sm border-0">
-        <div class="card-header bg-white border-0 py-4">
-            <div class="text-center">
-                <h2 class="mb-1">Select Date & Time</h2>
-                <p class="text-muted">Choose a convenient slot for your consultation with</p>
-                <div class="d-flex align-items-center justify-content-center">
-                    <img src="../assets/images/lawyers/lawyer<?= rand(1,3) ?>.jpg" class="rounded-circle me-3" width="50" height="50">
-                    <div>
-                        <h5 class="mb-0"><?= htmlspecialchars($lawyer['first_name'] . ' ' . $lawyer['last_name']) ?></h5>
-                        <small class="text-muted"><?= htmlspecialchars($lawyer['specialization_name']) ?></small>
-                    </div>
+<div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-4xl mx-auto">
+        <div class="bg-white shadow-xl rounded-lg overflow-hidden">
+            <!-- Progress bar -->
+            <div class="px-6 py-4 border-b border-gray-200">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-semibold text-gray-800">Select Date & Time</h2>
+                    <span class="text-sm font-medium text-indigo-600">Step 3 of 4</span>
+                </div>
+                <div class="mt-4 w-full bg-gray-200 rounded-full h-2.5">
+                    <div class="bg-indigo-600 h-2.5 rounded-full" style="width: 75%"></div>
                 </div>
             </div>
-        </div>
-        
-        <div class="card-body">
-            <form action="step4.php" method="post" id="bookingForm">
-                <div class="row mb-4">
-                    <div class="col-md-6">
-                        <label class="form-label fw-bold">Select Your Timezone</label>
-                        <select class="form-select" id="timezone" name="timezone" required>
-                            <option value="" selected disabled>Choose your timezone</option>
-                            <?php
-                            $timezones = DateTimeZone::listIdentifiers();
-                            foreach ($timezones as $tz):
-                                if (strpos($tz, '/') !== false): // Only show region/city timezones
-                            ?>
-                            <option value="<?= htmlspecialchars($tz) ?>"><?= htmlspecialchars(str_replace('_', ' ', $tz)) ?></option>
-                            <?php 
-                                endif;
-                            endforeach; 
-                            ?>
-                        </select>
+            
+            <div class="px-6 py-5">
+                <div class="bg-indigo-50 border-l-4 border-indigo-400 p-4 mb-6">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9z" clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-sm text-indigo-700">
+                                Booking with <strong><?php echo htmlspecialchars($lawyer['first_name'] . ' ' . $lawyer['last_name']); ?></strong> 
+                                for <strong><?php echo htmlspecialchars($lawyer['specialization_name']); ?></strong>.
+                            </p>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="mb-4">
-                    <label class="form-label fw-bold">Available Time Slots</label>
-                    <div id="calendar" class="border rounded-3 p-3 bg-white shadow-sm"></div>
-                    <input type="hidden" id="appointment_date" name="appointment_date" required>
-                    <input type="hidden" id="appointment_time" name="appointment_time" required>
-                    <div id="selected-slot" class="mt-3 p-3 bg-light rounded d-none">
-                        <h6 class="mb-0"><i class="far fa-calendar-check text-primary me-2"></i> <span id="selected-date"></span> at <span id="selected-time"></span></h6>
-                    </div>
-                </div>
+                <div id="calendar" class="mb-6 rounded-lg border border-gray-200 p-4"></div>
                 
-                <div class="d-flex justify-content-between mt-5">
-                    <a href="step2.php" class="btn btn-outline-secondary px-4 py-2">
-                        <i class="fas fa-arrow-left me-2"></i> Back
-                    </a>
-                    <button type="submit" class="btn btn-primary px-4 py-2" id="nextButton" disabled>
-                        Next <i class="fas fa-arrow-right ms-2"></i>
-                    </button>
-                </div>
-            </form>
+                <form id="timeSlotForm" action="step4.php" method="post">
+                    <input type="hidden" name="lawyer_id" value="<?php echo $lawyer_id; ?>">
+                    <input type="hidden" name="specialization_id" value="<?php echo $specialization_id; ?>">
+                    <input type="hidden" id="selectedDate" name="appointment_date" required>
+                    <input type="hidden" id="selectedTime" name="start_time" required>
+                    <input type="hidden" id="selectedEndTime" name="end_time" required>
+                    
+                    <div class="flex justify-between">
+                        <a href="step2.php" class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="-ml-1 mr-2 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                            </svg>
+                            Back
+                        </a>
+                        <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out" id="nextButton" disabled>
+                            Next: Your Details
+                            <svg xmlns="http://www.w3.org/2000/svg" class="-mr-1 ml-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                            </svg>
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- FullCalendar CSS -->
-<link href='https://cdn.jsdelivr.net/npm/fullcalendar@5.11.3/main.min.css' rel='stylesheet' />
-<!-- FullCalendar JS -->
-<script src='https://cdn.jsdelivr.net/npm/fullcalendar@5.11.3/main.min.js'></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const calendarEl = document.getElementById('calendar');
-    const timezoneSelect = document.getElementById('timezone');
-    const dateInput = document.getElementById('appointment_date');
-    const timeInput = document.getElementById('appointment_time');
+    const selectedDateInput = document.getElementById('selectedDate');
+    const selectedTimeInput = document.getElementById('selectedTime');
+    const selectedEndTimeInput = document.getElementById('selectedEndTime');
     const nextButton = document.getElementById('nextButton');
-    const selectedSlot = document.getElementById('selected-slot');
-    const selectedDate = document.getElementById('selected-date');
-    const selectedTime = document.getElementById('selected-time');
     
-    let calendar;
-    let selectedEvent = null;
+    // Convert PHP time slots to JavaScript format
+    const availableSlots = [
+        <?php 
+        $time_slots->data_seek(0);
+        while($slot = $time_slots->fetch_assoc()): 
+            $day = $slot['day_of_week'] - 1; // FullCalendar uses 0-6 for days
+            $start = $slot['start_time'];
+            $end = $slot['end_time'];
+            echo "{ daysOfWeek: [$day], startTime: '$start', endTime: '$end' },\n";
+        endwhile; 
+        ?>
+    ];
     
-    timezoneSelect.addEventListener('change', function() {
-        if (calendar) {
-            calendar.destroy();
-        }
-        
-        const timezone = this.value;
-        
-        calendar = new FullCalendar.Calendar(calendarEl, {
-            initialView: 'timeGridWeek',
-            timeZone: timezone,
-            headerToolbar: {
-                left: 'prev,next today',
-                center: 'title',
-                right: 'timeGridWeek,timeGridDay'
-            },
-            slotMinTime: '<?= $lawyer['start_time'] ?>',
-            slotMaxTime: '<?= $lawyer['end_time'] ?>',
-            slotDuration: '01:00:00',
-            slotLabelInterval: '01:00:00',
-            allDaySlot: false,
-            selectable: true,
-            selectMirror: true,
-            selectOverlap: false,
-            select: function(info) {
-                // Clear previous selection
-                if (selectedEvent) {
-                    selectedEvent.remove();
-                }
+    // Convert PHP appointments to JavaScript format
+    const busySlots = [
+        <?php 
+        while($appt = $appointments->fetch_assoc()): 
+            $date = $appt['appointment_date'];
+            $start = $appt['start_time'];
+            $end = $appt['end_time'];
+            echo "{ start: '$date $start', end: '$date $end', display: 'background', color: '#ff9e9e' },\n";
+        endwhile; 
+        ?>
+    ];
+    
+    const calendar = new FullCalendar.Calendar(calendarEl, {
+        initialView: 'timeGridWeek',
+        headerToolbar: {
+            left: 'prev,next today',
+            center: 'title',
+            right: 'timeGridWeek,timeGridDay'
+        },
+        slotMinTime: '08:00:00',
+        slotMaxTime: '18:00:00',
+        weekends: false,
+        selectable: true,
+        selectMirror: true,
+        selectOverlap: false,
+        selectConstraint: {
+            daysOfWeek: [1, 2, 3, 4, 5], // Mon-Fri
+            startTime: '09:00',
+            endTime: '17:00'
+        },
+        businessHours: availableSlots,
+        events: busySlots,
+        select: function(info) {
+            const start = info.start;
+            const end = info.end;
+            
+            // Check if selected slot is within business hours
+            const isAvailable = availableSlots.some(slot => {
+                const dayMatch = slot.daysOfWeek.includes(start.getDay());
+                const startTime = slot.startTime.split(':');
+                const endTime = slot.endTime.split(':');
+                const slotStart = new Date(start);
+                slotStart.setHours(parseInt(startTime[0]), parseInt(startTime[1]), 0);
+                const slotEnd = new Date(start);
+                slotEnd.setHours(parseInt(endTime[0]), parseInt(endTime[1]), 0);
                 
-                // Create new selected event
-                selectedEvent = new FullCalendar.Event({
-                    title: 'Your Appointment',
-                    start: info.start,
-                    end: info.end,
-                    color: '#4f46e5',
-                    display: 'background'
-                });
-                calendar.addEvent(selectedEvent);
-                
-                // Set hidden inputs
-                const selectedDateStr = info.startStr.split('T')[0];
-                const selectedTimeStr = info.startStr.split('T')[1].substring(0, 5);
-                
-                dateInput.value = selectedDateStr;
-                timeInput.value = selectedTimeStr;
-                
-                // Update UI
-                displaySelectedSlot(selectedDateStr, selectedTimeStr);
-                nextButton.disabled = false;
-                
+                return dayMatch && start >= slotStart && end <= slotEnd;
+            });
+            
+            if (!isAvailable) {
+                alert('Please select an available time slot during business hours.');
                 calendar.unselect();
-            },
-            events: {
-                url: '../includes/functions.php',
-                method: 'POST',
-                extraParams: {
-                    action: 'get_lawyer_availability',
-                    lawyer_id: <?= $lawyer_id ?>
-                },
-                failure: function() {
-                    alert('Error loading availability');
-                }
-            },
-            businessHours: {
-                daysOfWeek: [<?= $lawyer['available_days'] ?>],
-                startTime: '<?= $lawyer['start_time'] ?>',
-                endTime: '<?= $lawyer['end_time'] ?>'
-            },
-            eventColor: '#e5e7eb',
-            eventDisplay: 'background',
-            slotEventOverlap: false,
-            selectAllow: function(selectInfo) {
-                // Only allow selection during business hours
-                return selectInfo.start.getHours() >= <?= (int)substr($lawyer['start_time'], 0, 2) ?> && 
-                       selectInfo.end.getHours() <= <?= (int)substr($lawyer['end_time'], 0, 2) ?>;
+                return;
             }
-        });
-        
-        calendar.render();
-    });
-    
-    function displaySelectedSlot(dateStr, timeStr) {
-        const date = new Date(dateStr);
-        const time = new Date('1970-01-01T' + timeStr + 'Z');
-        
-        selectedDate.textContent = date.toLocaleDateString('en-US', { 
-            weekday: 'long', 
-            month: 'long', 
-            day: 'numeric' 
-        });
-        
-        selectedTime.textContent = time.toLocaleTimeString('en-US', { 
-            hour: 'numeric', 
-            minute: '2-digit', 
-            hour12: true 
-        });
-        
-        selectedSlot.classList.remove('d-none');
-    }
-    
-    document.getElementById('bookingForm').addEventListener('submit', function(e) {
-        if (!dateInput.value || !timeInput.value) {
-            e.preventDefault();
-            alert('Please select a date and time for your appointment');
+            
+            // Check if selected slot conflicts with existing appointments
+            const isBusy = busySlots.some(slot => {
+                const busyStart = new Date(slot.start);
+                const busyEnd = new Date(slot.end);
+                return (start < busyEnd && end > busyStart);
+            });
+            
+            if (isBusy) {
+                alert('This time slot is already booked. Please select another time.');
+                calendar.unselect();
+                return;
+            }
+            
+            // Format date and time for form submission
+            const dateStr = start.toISOString().split('T')[0];
+            const timeStr = start.toTimeString().substring(0, 5);
+            const endTimeStr = end.toTimeString().substring(0, 5);
+            
+            selectedDateInput.value = dateStr;
+            selectedTimeInput.value = timeStr + ':00';
+            selectedEndTimeInput.value = endTimeStr + ':00';
+            
+            nextButton.disabled = false;
+            
+            // Show selected time confirmation
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-4 right-4 bg-indigo-600 text-white px-4 py-2 rounded-md shadow-lg flex items-center';
+            toast.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                </svg>
+                Selected: ${dateStr} from ${timeStr} to ${endTimeStr}
+            `;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'transition', 'duration-300', 'ease-in-out');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         }
     });
+    
+    calendar.render();
 });
 </script>
 
-<style>
-.fc .fc-timegrid-slot {
-    height: 3em;
-}
-.fc .fc-timegrid-slot-label {
-    vertical-align: middle;
-}
-.fc .fc-timegrid-col.fc-day-today {
-    background-color: #f0fdf4;
-}
-.fc .fc-timegrid-now-indicator-arrow {
-    border-color: #ef4444;
-}
-.fc .fc-timegrid-now-indicator-line {
-    border-color: #ef4444;
-}
-.fc .fc-timegrid-event-harness-inset .fc-timegrid-event {
-    box-shadow: none;
-}
-.fc .fc-timegrid-event .fc-event-main {
-    padding: 2px;
-}
-.fc .fc-event.booked {
-    background-color: #fee2e2;
-    border-color: #fee2e2;
-}
-.fc .fc-event.unavailable {
-    background-color: #e5e7eb;
-    border-color: #e5e7eb;
-}
-</style>
-
-<?php include '../includes/footer.php'; ?>
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+?>

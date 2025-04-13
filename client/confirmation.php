@@ -1,229 +1,162 @@
-<?php 
-include '../includes/config.php';
+<?php
+require_once __DIR__ . '/../includes/config.php';
 
-// Check if form was submitted
-if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_SESSION['booking'])) {
-    header("Location: index.php");
-    exit;
+// Verify required data exists
+if (!isset($_POST['first_name']) || !isset($_SESSION['booking'])) {
+    header("Location: step1.php");
+    exit();
 }
 
-// Validate input
-$required = ['first_name', 'last_name', 'email', 'phone', 'appointment_time'];
-foreach ($required as $field) {
-    if (empty($_POST[$field])) {
-        header("Location: step4.php");
-        exit;
-    }
-}
+// Sanitize all inputs
+$client_data = [
+    'first_name' => sanitizeInput($_POST['first_name']),
+    'last_name'  => sanitizeInput($_POST['last_name']),
+    'email'      => sanitizeInput($_POST['email']),
+    'phone'      => sanitizeInput($_POST['phone'])
+];
 
-// Store client details in database
-$stmt = $pdo->prepare("
-    INSERT INTO clients (first_name, last_name, email, phone)
-    VALUES (?, ?, ?, ?)
-");
-$stmt->execute([
-    $_POST['first_name'],
-    $_POST['last_name'],
-    $_POST['email'],
-    $_POST['phone']
-]);
-$client_id = $pdo->lastInsertId();
+$appointment_data = [
+    'lawyer_id' => (int)$_SESSION['booking']['lawyer_id'],
+    'specialization_id' => (int)$_SESSION['booking']['specialization_id'],
+    'appointment_date' => sanitizeInput($_SESSION['booking']['appointment_date']),
+    'start_time' => sanitizeInput($_SESSION['booking']['start_time']),
+    'end_time' => sanitizeInput($_SESSION['booking']['end_time']),
+    'case_details' => isset($_POST['case_details']) ? sanitizeInput($_POST['case_details']) : null
+];
 
-// Create appointment
-$stmt = $pdo->prepare("
-    INSERT INTO appointments (
-        lawyer_id, 
-        client_id, 
-        specialization_id, 
-        appointment_date, 
-        start_time, 
-        end_time, 
-        timezone, 
-        case_details,
-        status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
-");
+// Save client to database
+$stmt = $conn->prepare("INSERT INTO clients (first_name, last_name, email, phone) VALUES (?, ?, ?, ?)");
+$stmt->bind_param("ssss", 
+    $client_data['first_name'],
+    $client_data['last_name'],
+    $client_data['email'],
+    $client_data['phone']);
+$stmt->execute();
+$client_id = $stmt->insert_id;
+$stmt->close();
 
-// Calculate end time (1 hour after start time)
-$start_time = $_POST['appointment_time'];
-$end_time = date('H:i:s', strtotime($start_time) + 3600);
-
-$stmt->execute([
-    $_SESSION['booking']['lawyer_id'],
+// Save appointment to database
+$stmt = $conn->prepare("INSERT INTO appointments (lawyer_id, client_id, specialization_id, appointment_date, start_time, end_time, case_details) VALUES (?, ?, ?, ?, ?, ?, ?)");
+$stmt->bind_param("iiissss",
+    $appointment_data['lawyer_id'],
     $client_id,
-    $_SESSION['booking']['specialization_id'],
-    $_SESSION['booking']['appointment_date'],
-    $start_time,
-    $end_time,
-    $_SESSION['booking']['timezone'],
-    $_POST['case_details'] ?? null
-]);
-$appointment_id = $pdo->lastInsertId();
+    $appointment_data['specialization_id'],
+    $appointment_data['appointment_date'],
+    $appointment_data['start_time'],
+    $appointment_data['end_time'],
+    $appointment_data['case_details']);
+$stmt->execute();
+$appointment_id = $stmt->insert_id;
+$stmt->close();
 
-// Get appointment details for confirmation
-$stmt = $pdo->prepare("
-    SELECT 
-        a.*, 
-        c.first_name as client_first_name, 
-        c.last_name as client_last_name,
-        c.email as client_email,
-        c.phone as client_phone,
-        l.id as lawyer_id,
-        u.first_name as lawyer_first_name,
-        u.last_name as lawyer_last_name,
-        u.email as lawyer_email,
-        u.phone as lawyer_phone,
-        s.name as specialization_name
-    FROM appointments a
-    JOIN clients c ON a.client_id = c.id
-    JOIN lawyers l ON a.lawyer_id = l.id
-    JOIN users u ON l.user_id = u.id
-    JOIN specializations s ON a.specialization_id = s.id
-    WHERE a.id = ?
-");
-$stmt->execute([$appointment_id]);
-$appointment = $stmt->fetch();
+// Get lawyer details
+$stmt = $conn->prepare("SELECT u.first_name, u.last_name, u.email as lawyer_email FROM lawyers l JOIN users u ON l.user_id = u.id WHERE l.id = ?");
+$stmt->bind_param("i", $appointment_data['lawyer_id']);
+$stmt->execute();
+$lawyer = $stmt->get_result()->fetch_assoc();
+$stmt->close();
 
-// Clear booking session
+// Format date and time
+$formatted_date = date('l, F j, Y', strtotime($appointment_data['appointment_date']));
+$formatted_time = date('g:i A', strtotime($appointment_data['start_time'])) . ' - ' . date('g:i A', strtotime($appointment_data['end_time']));
+
+// Send notifications
+$email_content = generateEmailContent(
+    $client_data['first_name'] . ' ' . $client_data['last_name'],
+    $lawyer['first_name'] . ' ' . $lawyer['last_name'],
+    $formatted_date,
+    $formatted_time,
+    $appointment_data['case_details']
+);
+
+sendEmail(
+    $client_data['email'],
+    "Your Appointment Confirmation",
+    $email_content
+);
+
+sendEmail(
+    $lawyer['lawyer_email'],
+    "New Appointment Booking",
+    "You have a new appointment with {$client_data['first_name']} {$client_data['last_name']} on $formatted_date at $formatted_time"
+);
+
+sendSMS(
+    $client_data['phone'],
+    "Hello {$client_data['first_name']}, your appointment with {$lawyer['first_name']} {$lawyer['last_name']} is confirmed for $formatted_date at " . date('g:i A', strtotime($appointment_data['start_time'])) . "."
+);
+
+// Clear session data
 unset($_SESSION['booking']);
 
-$pageTitle = "Appointment Confirmed";
-include '../includes/header.php'; 
+// Display confirmation page
+require_once __DIR__ . '/../includes/header.php';
 ?>
 
-<div class="container my-5">
-    <div class="row justify-content-center">
-        <div class="col-lg-8">
-            <div class="card shadow-sm border-success">
-                <div class="card-header bg-success text-white">
-                    <div class="d-flex align-items-center justify-content-between">
-                        <h2 class="h5 mb-0"><i class="fas fa-check-circle me-2"></i>Appointment Confirmed</h2>
-                        <span class="confirmation-badge">#<?= $appointment['id'] ?></span>
-                    </div>
-                </div>
-                <div class="card-body">
-                    <div class="alert alert-success">
-                        <div class="d-flex">
-                            <div class="flex-shrink-0">
-                                <i class="fas fa-check-circle fa-2x text-success mt-1 me-3"></i>
-                            </div>
-                            <div>
-                                <h3 class="h4 mb-2">Thank you, <?= htmlspecialchars($appointment['client_first_name']) ?>!</h3>
-                                <p class="mb-0">Your appointment has been successfully booked. A confirmation has been sent to <strong><?= htmlspecialchars($appointment['client_email']) ?></strong>.</p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="card border-0 bg-light mb-4">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center mb-4">
-                                <img src="../assets/images/lawyers/lawyer<?= rand(1,3) ?>.jpg" alt="<?= htmlspecialchars($appointment['lawyer_first_name']) ?>" class="lawyer-img me-3">
-                                <div>
-                                    <h3 class="h5 mb-1"><?= htmlspecialchars($appointment['lawyer_first_name'] . ' ' . $appointment['lawyer_last_name']) ?></h3>
-                                    <p class="mb-1 text-accent"><?= htmlspecialchars($appointment['specialization_name']) ?></p>
-                                    <div class="d-flex small text-muted">
-                                        <span class="me-3"><i class="fas fa-star text-warning me-1"></i> 4.9</span>
-                                        <span><i class="fas fa-briefcase me-1"></i> 10+ years</span>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <div class="mb-3">
-                                        <h4 class="h6 mb-2 text-muted">APPOINTMENT DATE</h4>
-                                        <p class="mb-0 h5"><?= date('l, F j, Y', strtotime($appointment['appointment_date'])) ?></p>
-                                    </div>
-                                    
-                                    <div class="mb-3">
-                                        <h4 class="h6 mb-2 text-muted">TIME</h4>
-                                        <p class="mb-0 h5"><?= date('g:i A', strtotime($appointment['start_time'])) ?> - <?= date('g:i A', strtotime($appointment['end_time'])) ?></p>
-                                        <small class="text-muted"><?= htmlspecialchars($appointment['timezone']) ?></small>
-                                    </div>
-                                </div>
-                                <div class="col-md-6">
-                                    <div class="mb-3">
-                                        <h4 class="h6 mb-2 text-muted">YOUR INFORMATION</h4>
-                                        <p class="mb-1"><?= htmlspecialchars($appointment['client_first_name'] . ' ' . $appointment['client_last_name']) ?></p>
-                                        <p class="mb-1 small"><?= htmlspecialchars($appointment['client_email']) ?></p>
-                                        <p class="mb-0 small"><?= htmlspecialchars($appointment['client_phone']) ?></p>
-                                    </div>
-                                    
-                                    <div class="mb-3">
-                                        <h4 class="h6 mb-2 text-muted">LAWYER CONTACT</h4>
-                                        <p class="mb-1 small"><?= htmlspecialchars($appointment['lawyer_email']) ?></p>
-                                        <p class="mb-0 small"><?= htmlspecialchars($appointment['lawyer_phone']) ?></p>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <?php if (!empty($appointment['case_details'])): ?>
-                            <div class="mt-4 pt-3 border-top">
-                                <h4 class="h6 mb-2 text-muted">CASE DETAILS</h4>
-                                <p class="mb-0"><?= nl2br(htmlspecialchars($appointment['case_details'])) ?></p>
-                            </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    
-                    <div class="d-flex justify-content-between">
-                        <a href="index.php" class="btn btn-outline-secondary">
-                            <i class="fas fa-home me-2"></i>Back to Home
-                        </a>
-                        <div>
-                            <button onclick="window.print()" class="btn btn-outline-primary me-2">
-                                <i class="fas fa-print me-2"></i>Print
-                            </button>
-                            <a href="#" class="btn btn-primary">
-                                <i class="fas fa-calendar-plus me-2"></i>Add to Calendar
-                            </a>
-                        </div>
-                    </div>
+<div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-3xl mx-auto">
+        <div class="bg-white shadow-xl rounded-lg overflow-hidden">
+            <div class="bg-green-600 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xl font-semibold text-white">Appointment Confirmed!</h2>
+                    <span class="text-sm font-medium text-green-100">Completed</span>
                 </div>
             </div>
             
-            <div class="card shadow-sm mt-4">
-                <div class="card-body">
-                    <h4 class="h5 mb-3">What to Expect Next</h4>
-                    <div class="row">
-                        <div class="col-md-4 mb-3 mb-md-0">
-                            <div class="d-flex">
-                                <div class="flex-shrink-0 text-primary me-3">
-                                    <i class="fas fa-envelope fa-2x"></i>
-                                </div>
-                                <div>
-                                    <h5 class="h6 mb-1">Confirmation Email</h5>
-                                    <p class="small text-muted mb-0">You'll receive a confirmation email with all the details.</p>
-                                </div>
-                            </div>
+            <div class="px-6 py-8 text-center">
+                <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                
+                <h3 class="text-2xl font-bold text-gray-900 mb-2">Thank You!</h3>
+                <p class="text-lg text-gray-600 mb-6">Your appointment has been successfully booked.</p>
+                
+                <div class="bg-green-50 border-l-4 border-green-400 p-4 mb-8 rounded-lg text-left">
+                    <h4 class="text-lg font-medium text-green-800 mb-2">Confirmation Sent</h4>
+                    <p class="text-sm text-green-700 mb-1">✓ Email confirmation sent to <strong><?= htmlspecialchars($client_data['email']) ?></strong></p>
+                    <p class="text-sm text-green-700">✓ SMS reminder will be sent to <strong><?= htmlspecialchars($client_data['phone']) ?></strong></p>
+                </div>
+                
+                <div class="bg-white border border-gray-200 rounded-lg p-6 mb-8 text-left">
+                    <h4 class="text-lg font-medium text-gray-900 mb-4">Appointment Details</h4>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <p class="text-sm text-gray-600"><span class="font-medium">Lawyer:</span> <?= htmlspecialchars($lawyer['first_name'] . ' ' . $lawyer['last_name']) ?></p>
+                            <p class="text-sm text-gray-600"><span class="font-medium">Date:</span> <?= $formatted_date ?></p>
                         </div>
-                        <div class="col-md-4 mb-3 mb-md-0">
-                            <div class="d-flex">
-                                <div class="flex-shrink-0 text-primary me-3">
-                                    <i class="fas fa-clock fa-2x"></i>
-                                </div>
-                                <div>
-                                    <h5 class="h6 mb-1">Reminder</h5>
-                                    <p class="small text-muted mb-0">We'll send you a reminder 24 hours before your appointment.</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="d-flex">
-                                <div class="flex-shrink-0 text-primary me-3">
-                                    <i class="fas fa-video fa-2x"></i>
-                                </div>
-                                <div>
-                                    <h5 class="h6 mb-1">Meeting Link</h5>
-                                    <p class="small text-muted mb-0">If virtual, the meeting link will be sent to your email.</p>
-                                </div>
-                            </div>
+                        <div>
+                            <p class="text-sm text-gray-600"><span class="font-medium">Time:</span> <?= $formatted_time ?></p>
+                            <p class="text-sm text-gray-600"><span class="font-medium">Reference #:</span> APPT-<?= str_pad($appointment_id, 6, '0', STR_PAD_LEFT) ?></p>
                         </div>
                     </div>
+                    
+                    <?php if (!empty($appointment_data['case_details'])): ?>
+                    <div class="mt-4 pt-4 border-t border-gray-200">
+                        <p class="text-sm font-medium text-gray-900 mb-1">Your Notes:</p>
+                        <p class="text-sm text-gray-600"><?= htmlspecialchars($appointment_data['case_details']) ?></p>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                
+                <div class="space-y-3">
+                    <a href="<?= BASE_URL ?>client/" class="w-full flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                        Back to Home
+                    </a>
+                    <a href="#" class="w-full flex items-center justify-center px-4 py-3 border border-gray-300 text-base font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="-ml-1 mr-2 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Add to Calendar
+                    </a>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<?php include '../includes/footer.php'; ?>
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+?>

@@ -475,4 +475,70 @@ tr {
     padding: 0.25rem 0.5rem;
     border-radius: 9999px;
 }
+
+/* Main styling for the booking system */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+.card {
+    border: none;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.card-header {
+    border-radius: 10px 10px 0 0 !important;
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #eee;
+}
+
+.progress {
+    height: 10px;
+    margin-top: 10px;
+}
+
+.list-group-item {
+    margin-bottom: 5px;
+    border-radius: 5px !important;
+}
+
+.form-check-input {
+    margin-top: 0.3em;
+}
+
+/* Calendar styling */
+.fc {
+    background-color: white;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.fc-header-toolbar {
+    margin-bottom: 1em;
+}
+
+.fc-event {
+    background-color: #dc3545;
+    border: none;
+}
+
+.fc-daygrid-event {
+    border-radius: 3px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .fc-toolbar-title {
+        font-size: 1.2em;
+    }
+    
+    .fc-button {
+        padding: 0.3em 0.6em;
+        font-size: 0.9em;
+    }
+}
+
 }
